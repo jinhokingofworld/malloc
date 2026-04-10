@@ -1,3 +1,4 @@
+/* malloc lab에서 구현해야 할 함수와 팀 정보 구조체 선언입니다. */
 #include <stdio.h>
 
 extern int mm_init (void);
@@ -7,17 +8,16 @@ extern void *mm_realloc(void *ptr, size_t size);
 
 
 /* 
- * Students work in teams of one or two.  Teams enter their team name, 
- * personal names and login IDs in a struct of this
- * type in their bits.c file.
+ * 학생들은 1인 또는 2인 팀으로 작업합니다.
+ * 이 구조체에는 팀 이름과 팀원 정보를 적어 둡니다.
+ * 드라이버는 이 값을 읽어 제출자 정보를 확인합니다.
  */
 typedef struct {
-    char *teamname; /* ID1+ID2 or ID1 */
-    char *name1;    /* full name of first member */
-    char *id1;      /* login ID of first member */
-    char *name2;    /* full name of second member (if any) */
-    char *id2;      /* login ID of second member */
+    char *teamname; /* 두 사람 팀이면 ID1+ID2, 한 사람 팀이면 ID1 */
+    char *name1;    /* 첫 번째 팀원의 실명 */
+    char *id1;      /* 첫 번째 팀원의 로그인 ID */
+    char *name2;    /* 두 번째 팀원의 실명(있다면) */
+    char *id2;      /* 두 번째 팀원의 로그인 ID */
 } team_t;
 
 extern team_t team;
-
