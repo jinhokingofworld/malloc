@@ -179,12 +179,15 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    // 현재 포인터가 가리키는 애 free만들기
+    if (ptr == NULL) return;
 
+    // 현재 포인터가 가리키는 애 free만들기
+    unsigned int size = GET_SIZE(HDRP(ptr));
+    PUT(HDRP(ptr), PACK(size, 0));
+    PUT(FTRP(ptr), PACK(size, 0));
 
     // coalease로 사이즈 키우기
     coalesce(ptr);
-
 }
 
 /*
@@ -249,6 +252,8 @@ void *extend_heap(size_t size) {
 
 // 연결 coalesce
 void *coalesce(void *bp) {
+    if (bp == NULL) return;
+
     unsigned int prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     unsigned int next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     unsigned int size = GET_SIZE(HDRP(bp));
