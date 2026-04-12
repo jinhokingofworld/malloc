@@ -129,8 +129,11 @@ int mm_init(void)
     //epilogue - header
     PUT((char *)heap_startp + 3*WSIZE, PACK(0, 1));
     
-    if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
+    void *bp = extend_heap(CHUNKSIZE / WSIZE);
+    if (bp == NULL)
         return -1;
+
+    coalesce(bp);
 
     return 0;
 }
@@ -143,25 +146,28 @@ int mm_init(void)
  */
 void *mm_malloc(size_t size)
 {
-    /*  일단 First Fit으로 구현.
-
-        힙을 탐색하면서 할당 가능한 첫 블록을 확인한다.
-
+    /*
+        heap을 한번 탐색한다.
+        size보다 큰 가용 메모리가 없을 때,
+            1. coalesce를 해서 큰 가용 메모리를 만든다.
+            2. 그래도 없을 때 sbrk으로 추가해서 사용
+        가용 메모리 공간이 있을 때,
+            1. 어떤 메모리 공간을 사용할 지 정한다(FF, NF, BF)
+            2. 메모리 공간을 전부 사용할지, 나눌지 정한다.
     */
 
     /* 요청 크기와 메타데이터 크기를 더한 뒤 정렬 기준에 맞춥니다. */
-    int newsize = ALIGN(size + SIZE_T_SIZE);
     /* 시뮬레이션된 힙을 newsize 바이트만큼 확장합니다. */
-    void *p = mem_sbrk(newsize);
-
     /* 힙 확장에 실패하면 할당 실패를 의미하는 NULL을 반환합니다. */
+     /* 블록의 맨 앞에 원래 요청한 payload 크기를 저장합니다. */
+     /* 메타데이터 바로 뒤 주소가 사용자 payload의 시작점입니다. */
+    int newsize = ALIGN(size + SIZE_T_SIZE);
+    void *p = mem_sbrk(newsize);
     if (p == (void *)-1)
         return NULL;
     else
     {
-        /* 블록의 맨 앞에 원래 요청한 payload 크기를 저장합니다. */
         *(size_t *)p = size;
-        /* 메타데이터 바로 뒤 주소가 사용자 payload의 시작점입니다. */
         return (void *)((char *)p + SIZE_T_SIZE);
     }
 }
@@ -173,7 +179,12 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    /* 단순 구현이므로 free 요청을 무시합니다. */
+    // 현재 포인터가 가리키는 애 free만들기
+
+
+    // coalease로 사이즈 키우기
+    coalesce(ptr);
+
 }
 
 /*
@@ -231,11 +242,69 @@ void *extend_heap(size_t size) {
     PUT((char *)new_headp + (size * WSIZE) - WSIZE, PACK(size * WSIZE, 0));
     //Epilogue
     PUT((char *)new_headp + (size * WSIZE), PACK(0, 1));
+    coalesce(bp);
 
     return bp;
 }
 
 // 연결 coalesce
-void *coalesce(void *ptr) {
-    
+void *coalesce(void *bp) {
+    unsigned int prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+    unsigned int next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    unsigned int size = GET_SIZE(HDRP(bp));
+
+    if (prev_alloc && next_alloc) {              // case 1
+        return bp;
+    }
+
+    else if (prev_alloc && !next_alloc) {        // case 2
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
+    }
+
+    else if (!prev_alloc && next_alloc) {        // case 3
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+        PUT(FTRP(bp), PACK(size, 0));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        bp = PREV_BLKP(bp);
+    }
+
+    else {                                       // case 4
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
+                GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+        bp = PREV_BLKP(bp);
+    }
+
+    return bp;
+    // //앞을 확인한다.
+    // //2word 앞으로 footer == free인지 확인 가능
+    // void *prev_bp = PREV_BLKP(bp);
+    // void *prev_hp = HDRP(prev_bp);
+    // if (GET_ALLOC(prev_hp) == 0) {
+    //     //앞의 블록 사이즈 얻기
+    //     unsigned int prev_size = GET_SIZE(prev_hp);
+
+    //     //더한 값으로, 앞 블록 헤더 갱신
+    //     PUT(prev_hp, PACK(prev_size + current_size, 0));
+
+    //     //더한 값으로, 뒤 블록 푸터 갱신
+    //     PUT(FTRP(bp), PACK(prev_size + current_size, 0));
+    // }
+
+    // //뒤를 확인한다.
+    // void *next_bp = NEXT_BLKP(bp);
+    // void *next_fp = FTRP(next_bp);
+    // if (GET_ALLOC(HDRP(next_bp)) == 0) {
+    //     //합치기
+    //     //앞의 블록 사이즈 얻기
+    //     unsigned int next_size = GET_SIZE(next_fp);
+
+    //     //더한 값으로, 앞 블록 헤더 갱신
+    //     PUT(HDRP(bp), PACK(current_size + next_size, 0));
+    //     //더한 값으로, 뒤 블록 푸터 갱신
+    //     PUT(next_fp, PACK(current_size + next_size, 0));
+    // }
 }
