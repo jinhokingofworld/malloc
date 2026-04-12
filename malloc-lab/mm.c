@@ -83,8 +83,7 @@ team_t team = {
  * 이 단순 예제는 별도 가용 리스트나 힙 메타데이터를 만들지 않으므로
  * 실제 초기화 작업은 필요하지 않습니다.
  */
-int mm_init(void)
-{
+int mm_init(void) {
     /*
         역할: 할당기를 초기화한다.
         - 힙의 시작 부분에 패딩을 두어 이후 payload가 정렬되도록 한다.
@@ -101,7 +100,7 @@ int mm_init(void)
     if ((heap_startp = mem_sbrk(4 * WSIZE)) == (void *)-1)
         return -1;
 
-    void *curr = mem_heap_lo();
+    // void *curr = mem_heap_lo();
     heap_listp = ((char *)heap_startp + DSIZE);
 
     //기존에 썼던 코드도 맞음
@@ -156,20 +155,20 @@ void *mm_malloc(size_t size)
             2. 메모리 공간을 전부 사용할지, 나눌지 정한다.
     */
 
-    /* 요청 크기와 메타데이터 크기를 더한 뒤 정렬 기준에 맞춥니다. */
-    /* 시뮬레이션된 힙을 newsize 바이트만큼 확장합니다. */
-    /* 힙 확장에 실패하면 할당 실패를 의미하는 NULL을 반환합니다. */
-     /* 블록의 맨 앞에 원래 요청한 payload 크기를 저장합니다. */
-     /* 메타데이터 바로 뒤 주소가 사용자 payload의 시작점입니다. */
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-        return NULL;
-    else
-    {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+    int newsize = ALIGN(size + SIZE_T_SIZE) + DSIZE;
+    
+    //탐색을 통해, 메모리를 찾는다.
+    void *bp = first_fit(newsize);
+
+    //없다면, 힙을 확장해서 사용
+    if (bp == NULL) {
+        bp = extend_heap(newsize);
+        return bp;
     }
+
+    //있다면, 사이즈 조정해서 사용
+    place(bp, newsize);
+    return bp;
 }
 
 /*
@@ -312,4 +311,41 @@ void *coalesce(void *bp) {
     //     //더한 값으로, 뒤 블록 푸터 갱신
     //     PUT(next_fp, PACK(current_size + next_size, 0));
     // }
+}
+
+//쓸 수 있는 블록 찾기
+void* first_fit(unsigned int size) {
+    //리스트의 처음부터 순회를 한다.
+    
+    void *bp = (char *)heap_listp + WSIZE;
+    // 사이즈가 0이 아닐 때까지 순회를 한다.
+    while (GET_SIZE(HDRP(bp)) != 0) {
+        if (size <= GET_SIZE(HDRP(bp)) && GET_ALLOC(HDRP(bp)) == 0) return bp;
+
+        bp = NEXT_BLKP(bp);
+    }
+    
+    //못 찾았다면, NULL 리턴
+    return NULL;
+}
+
+//찾은 블록 사용하기
+//실제 블록 사이즈를 받아와야 함
+void place(void *bp, int newsize) {
+    //찾은 블록을 어떻게 사용할지 생각한다.
+    int temp = GET_SIZE(HDRP(bp)) - newsize;
+
+    //남은 블록의 크기가 최소 8바이트이상이 되지 않는다면, 그대로 사용한다.
+    if (temp < DSIZE) {
+        PUT(HDRP(bp), PACK(newsize, 1));
+        PUT(FTRP(bp), PACK(newsize, 1)); 
+        return;
+    }
+
+    //아니면 나눠서 사용한다.
+    PUT(FTRP(bp), PACK(temp, 0));
+    PUT(HDRP(bp), PACK(newsize, 1));
+    PUT(FTRP(bp), PACK(newsize, 1));
+    PUT((char *)FTRP(bp) + WSIZE, PACK(temp, 0));
+    return;
 }
