@@ -28,6 +28,7 @@
 #define CHUNKSIZE (1<<12) // 비트 시프트 연산, 2^12
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) > (y) ? (y) : (x))
 
 #define PACK(size, alloc) ((size) | (alloc))
 
@@ -199,15 +200,43 @@ void mm_free(void *ptr)
  * 기존 데이터 중 복사 가능한 만큼만 옮기고,
  * 이전 블록을 해제합니다.
  */
-void *mm_realloc(void *ptr, size_t size)
+void *mm_realloc(void *bp, size_t size)
 {
+    if (bp == NULL) return mm_malloc(size);
+    if (size == 0) {
+        mm_free(bp);
+        return NULL;
+    }
+
+    size_t asize = ALIGN(size) + DSIZE;
+    
     //일단 뒤 블록의 free인지 확인,
     //free면 사이즈를 확인하고, 현재 값과 더한 값이 size보다 크면, 병합하고, bp리턴
+    unsigned int next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    size_t curr_size = GET_SIZE(HDRP(bp));
 
-    //뒤 블록이 free가 아니면, ff로 크기가 맞는 새로운 위치를 찾음 
+    if (curr_size >= asize) {
+        return bp;
+    }
+
+    if (!next_alloc && asize <= next_size + curr_size) {
+        size_t total_size = curr_size + next_size;
+        PUT(HDRP(bp), PACK(total_size, 1));
+        PUT(FTRP(bp), PACK(total_size, 1));
+
+        return bp;
+    }
+
+    //뒤 블록이 free가 아니면, malloc으로 새로운 위치를 받아옴 
+    void *new_bp = mm_malloc(size);
+    if (new_bp == NULL) return NULL;
+
     //기존의 내용 복사
+    memcpy(new_bp, bp, MIN(size, curr_size - DSIZE));
+    mm_free(bp);
 
-    return NULL;
+    return new_bp;
 }
 
 //size_t는 메모리의 크기, 길이, 개수를 표현하는 표준 타입
@@ -233,8 +262,8 @@ void *extend_heap(size_t wsize) {
 void *coalesce(void *bp) {
     if (bp == NULL) return NULL;
 
-    unsigned int prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-    unsigned int next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    int prev_alloc = GET_ALLOC(HDRP(PREV_BLKP(bp)));
+    int next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     unsigned int size = GET_SIZE(HDRP(bp));
 
     if (prev_alloc && next_alloc) {              // case 1
