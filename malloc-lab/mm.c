@@ -57,15 +57,10 @@ static char *heap_listp;
  * 드라이버 프로그램은 이 값을 읽어 제출자 정보를 확인합니다.
  ********************************************************/
 team_t team = {
-    /* 팀 이름 */
     "ateam",
-    /* 첫 번째 팀원의 실명 */
-    "Harry Bovik",
-    /* 첫 번째 팀원의 이메일 주소 */
+    "jinho",
     "bovik@cs.cmu.edu",
-    /* 두 번째 팀원의 실명(없으면 빈 문자열) */
     "",
-    /* 두 번째 팀원의 이메일 주소(없으면 빈 문자열) */
     ""};
 
 /* 블록 주소를 8바이트 경계에 맞추기 위한 정렬 기준입니다. */
@@ -75,8 +70,15 @@ team_t team = {
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
 
 /* size_t 크기도 정렬 기준에 맞춰 저장하기 위한 상수입니다. */
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+// #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+int mm_init(void);
+void *mm_malloc(size_t size);
+void mm_free(void *ptr);
+void *extend_heap(size_t wsize);
+void *coalesce(void *bp);
+void* first_fit(size_t wsize);
+void place(void *bp, size_t wsize);
 /*
  * mm_init - malloc 패키지를 초기화합니다.
  *
@@ -92,8 +94,6 @@ int mm_init(void) {
         - 초기 가용 블록을 만들기 위해 힙을 CHUNKSIZE만큼 확장한다.
         - 확장에 실패하면 -1, 성공하면 0을 반환한다.
     */
-    //기본 메모리 요청
-    mem_init();
 
     void *heap_startp;
     //padding, prologue, epilogue공간 할당받기
@@ -129,10 +129,7 @@ int mm_init(void) {
     PUT((char *)heap_startp + 3*WSIZE, PACK(0, 1));
     
     void *bp = extend_heap(CHUNKSIZE / WSIZE);
-    if (bp == NULL)
-        return -1;
-
-    coalesce(bp);
+    if (bp == NULL) return -1;
 
     return 0;
 }
@@ -154,20 +151,25 @@ void *mm_malloc(size_t size)
             1. 어떤 메모리 공간을 사용할 지 정한다(FF, NF, BF)
             2. 메모리 공간을 전부 사용할지, 나눌지 정한다.
     */
+    if (size == 0) return NULL;
 
-    int newsize = ALIGN(size + SIZE_T_SIZE) + DSIZE;
-    
+    size_t asize = ALIGN(size) + DSIZE;
+    int words = (int)asize / WSIZE;
+
     //탐색을 통해, 메모리를 찾는다.
-    void *bp = first_fit(newsize);
+    void *bp = first_fit(asize);
 
-    //없다면, 힙을 확장해서 사용
+    //적합한 블록을 못 찾았다면, extend해서 할당
     if (bp == NULL) {
-        bp = extend_heap(newsize);
-        return bp;
+        bp = extend_heap(words);
+        //확장 실패
+        if (bp == NULL) {
+            return NULL;
+        }
     }
 
     //있다면, 사이즈 조정해서 사용
-    place(bp, newsize);
+    place(bp, asize);
     return bp;
 }
 
@@ -185,8 +187,9 @@ void mm_free(void *ptr)
     PUT(HDRP(ptr), PACK(size, 0));
     PUT(FTRP(ptr), PACK(size, 0));
 
-    // coalease로 사이즈 키우기
     coalesce(ptr);
+    // coalease로 사이즈 키우기
+    return;
 }
 
 /*
@@ -198,60 +201,37 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    /* 기존 블록 주소를 따로 보관합니다. */
-    void *oldptr = ptr;
-    /* 새 블록 주소를 저장할 변수입니다. */
-    void *newptr;
-    /* 실제로 복사할 바이트 수를 저장합니다. */
-    size_t copySize;
+    //일단 뒤 블록의 free인지 확인,
+    //free면 사이즈를 확인하고, 현재 값과 더한 값이 size보다 크면, 병합하고, bp리턴
 
-    /* 먼저 새 크기에 맞는 블록을 새로 확보합니다. */
-    newptr = mm_malloc(size);
+    //뒤 블록이 free가 아니면, ff로 크기가 맞는 새로운 위치를 찾음 
+    //기존의 내용 복사
 
-    /* 새 블록을 못 만들면 realloc도 실패입니다. */
-    if (newptr == NULL)
-        return NULL;
-    /* 기존 블록 앞 메타데이터에서 원래 크기를 읽어 옵니다. */
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    /* 새 블록이 더 작다면, 넘치는 부분은 복사하지 않도록 크기를 줄입니다. */
-    if (size < copySize)
-        copySize = size;
-    /* 안전한 범위만큼만 이전 내용을 새 블록으로 복사합니다. */
-    memcpy(newptr, oldptr, copySize);
-    /* 인터페이스상 이전 블록을 해제합니다. */
-    mm_free(oldptr);
-    /* 새 블록 주소를 반환합니다. */
-    return newptr;
+    return NULL;
 }
 
 //size_t는 메모리의 크기, 길이, 개수를 표현하는 표준 타입
 //여기에서는 word의 갯수를 받음
-void *extend_heap(size_t size) {
+void *extend_heap(size_t wsize) {
     //mem_sbrk → 공간 확보 → free block 생성 → epilogue 재배치
 
-    //원래는 이렇게 오버플로우가 일어나는 상황을 체크 해야 함
-    // if (size > INT_MAX) {
-    //     return NULL; // 또는 에러 처리
-    // }
-
-    void *bp = mem_sbrk((int) size * WSIZE);
+    void *bp = mem_sbrk((int) wsize * WSIZE);
     void *new_headp = (char *)bp - WSIZE; 
     if (bp == (void *) - 1)
         return NULL;
 
     //free Block 생성
-    PUT((char *)new_headp, PACK(size * WSIZE, 0));
-    PUT((char *)new_headp + (size * WSIZE) - WSIZE, PACK(size * WSIZE, 0));
+    PUT((char *)new_headp, PACK(wsize * WSIZE, 0));
+    PUT((char *)new_headp + (wsize * WSIZE) - WSIZE, PACK(wsize * WSIZE, 0));
     //Epilogue
-    PUT((char *)new_headp + (size * WSIZE), PACK(0, 1));
-    coalesce(bp);
+    PUT((char *)new_headp + (wsize * WSIZE), PACK(0, 1));
 
-    return bp;
+    return coalesce(bp);
 }
 
 // 연결 coalesce
 void *coalesce(void *bp) {
-    if (bp == NULL) return;
+    if (bp == NULL) return NULL;
 
     unsigned int prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     unsigned int next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
@@ -313,14 +293,13 @@ void *coalesce(void *bp) {
     // }
 }
 
-//쓸 수 있는 블록 찾기
-void* first_fit(unsigned int size) {
+//쓸 수 있는 블록 찾기, 워드 사이즈 받았음
+void* first_fit(size_t asize) {
     //리스트의 처음부터 순회를 한다.
-    
-    void *bp = (char *)heap_listp + WSIZE;
+    void *bp = NEXT_BLKP(heap_listp);
     // 사이즈가 0이 아닐 때까지 순회를 한다.
     while (GET_SIZE(HDRP(bp)) != 0) {
-        if (size <= GET_SIZE(HDRP(bp)) && GET_ALLOC(HDRP(bp)) == 0) return bp;
+        if (asize <= GET_SIZE(HDRP(bp)) && GET_ALLOC(HDRP(bp)) == 0) return bp;
 
         bp = NEXT_BLKP(bp);
     }
@@ -329,23 +308,25 @@ void* first_fit(unsigned int size) {
     return NULL;
 }
 
-//찾은 블록 사용하기
 //실제 블록 사이즈를 받아와야 함
-void place(void *bp, int newsize) {
+void place(void *bp, size_t asize) {
     //찾은 블록을 어떻게 사용할지 생각한다.
-    int temp = GET_SIZE(HDRP(bp)) - newsize;
+    size_t ogsize = GET_SIZE(HDRP(bp));
+    size_t temp = ogsize - asize;
 
     //남은 블록의 크기가 최소 8바이트이상이 되지 않는다면, 그대로 사용한다.
-    if (temp < DSIZE) {
-        PUT(HDRP(bp), PACK(newsize, 1));
-        PUT(FTRP(bp), PACK(newsize, 1)); 
+    if (temp < 2 * DSIZE) {
+        PUT(HDRP(bp), PACK(ogsize, 1));
+        PUT(FTRP(bp), PACK(ogsize, 1)); 
         return;
     }
 
     //아니면 나눠서 사용한다.
-    PUT(FTRP(bp), PACK(temp, 0));
-    PUT(HDRP(bp), PACK(newsize, 1));
-    PUT(FTRP(bp), PACK(newsize, 1));
-    PUT((char *)FTRP(bp) + WSIZE, PACK(temp, 0));
+    PUT(HDRP(bp), PACK(asize, 1));
+    PUT(FTRP(bp), PACK(asize, 1));
+    
+    void *next_bp = NEXT_BLKP(bp);  
+    PUT(HDRP(next_bp), PACK(temp, 0));
+    PUT(FTRP(next_bp), PACK(temp, 0));
     return;
 }
