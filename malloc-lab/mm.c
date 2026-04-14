@@ -1,17 +1,5 @@
 /*
- * mm-naive.c - 매우 단순하게 만든 malloc 구현 예제입니다.
- *
- * 이 구현은 새 블록이 필요할 때마다 힙의 끝(brk 포인터)을 앞으로 늘려서
- * 메모리를 내어 줍니다. 이미 사용이 끝난 블록을 다시 활용하지 않기 때문에
- * 구현은 쉽지만 메모리 효율은 좋지 않습니다.
- *
- * 블록 맨 앞에는 요청 크기를 저장하는 작은 메타데이터가 있고,
- * 그 뒤에 사용자가 실제로 쓰는 데이터 영역(payload)이 옵니다.
- * 일반적인 allocator가 갖는 빈 블록 재사용, 병합(coalescing),
- * 복잡한 헤더/푸터 관리 같은 기능은 없습니다.
- *
- * realloc도 별도 최적화 없이,
- * 새 블록을 할당하고 기존 내용을 복사한 뒤 이전 블록을 해제하는 방식입니다.
+Explicit Free List Memory Allocator
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,14 +31,15 @@
 
 //header 위치 = header는 1WORD만큼이니까 bp에서 4 줄임
 #define HDRP(bp)        ((char *)(bp) - WSIZE)
-//payload 시작주소 + 현재 블록 크기 = 다음 블록 payload 시작주소
-//payload시작주소 - header - footer => footer 시작주소
 #define FTRP(bp)        ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+#define PRVP(bp)        ((char *)(bp))
+#define NXTP(bp)        ((char *)(bp) + WSIZE)
 
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
 static char *heap_listp;
+static char *free_listp;
 
 /*********************************************************
  * 학생 안내:
@@ -58,9 +47,9 @@ static char *heap_listp;
  * 드라이버 프로그램은 이 값을 읽어 제출자 정보를 확인합니다.
  ********************************************************/
 team_t team = {
-    "ateam",
+    "Ateam",
     "jinho",
-    "bovik@cs.cmu.edu",
+    "jinhokinoftheword@gmail.com",
     "",
     ""};
 
@@ -80,12 +69,8 @@ void *extend_heap(size_t wsize);
 void *coalesce(void *bp);
 void* first_fit(size_t wsize);
 void place(void *bp, size_t wsize);
-/*
- * mm_init - malloc 패키지를 초기화합니다.
- *
- * 이 단순 예제는 별도 가용 리스트나 힙 메타데이터를 만들지 않으므로
- * 실제 초기화 작업은 필요하지 않습니다.
- */
+
+
 int mm_init(void) {
     /*
         역할: 할당기를 초기화한다.
@@ -96,38 +81,19 @@ int mm_init(void) {
         - 확장에 실패하면 -1, 성공하면 0을 반환한다.
     */
 
-    void *heap_startp;
+    void *heap_listp;
     //padding, prologue, epilogue공간 할당받기
-    if ((heap_startp = mem_sbrk(4 * WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
         return -1;
 
-    // void *curr = mem_heap_lo();
-    heap_listp = ((char *)heap_startp + DSIZE);
-
-    //기존에 썼던 코드도 맞음
-    // /* 여기는 padding */
-    // PUT(curr, 0);
-
-    // curr = (char *)curr + WSIZE;
-    // /* prologue header */
-    // PUT(curr, PACK(DSIZE, 1));
-
-    // curr = (char *)curr + WSIZE;
-    // /* prologue footer */
-    // PUT(curr, PACK(DSIZE, 1));
-
-    // curr = (char *)curr + WSIZE;
-    // /* epilogue header */
-    // PUT(curr, PACK(0, 1));
-
     //padding
-    PUT((char *)heap_startp, 0);
+    PUT((char *)heap_listp, 0);
     //prologue - header
-    PUT((char *)heap_startp + WSIZE, PACK(DSIZE, 1));
+    PUT((char *)heap_listp + WSIZE, PACK(DSIZE, 1));
     //prologue - footer
-    PUT((char *)heap_startp + 2*WSIZE, PACK(DSIZE, 1));
+    PUT((char *)heap_listp + 2*WSIZE, PACK(DSIZE, 1));
     //epilogue - header
-    PUT((char *)heap_startp + 3*WSIZE, PACK(0, 1));
+    PUT((char *)heap_listp + 3*WSIZE, PACK(0, 1));
     
     void *bp = extend_heap(CHUNKSIZE / WSIZE);
     if (bp == NULL) return -1;
@@ -240,20 +206,22 @@ void *mm_realloc(void *bp, size_t size)
 }
 
 //size_t는 메모리의 크기, 길이, 개수를 표현하는 표준 타입
-//여기에서는 word의 갯수를 받음
+
 void *extend_heap(size_t wsize) {
     //mem_sbrk → 공간 확보 → free block 생성 → epilogue 재배치
 
     void *bp = mem_sbrk((int) wsize * WSIZE);
-    void *new_headp = (char *)bp - WSIZE; 
-    if (bp == (void *) - 1)
-        return NULL;
+    // void *new_listp = (char *)bp - WSIZE; 
+    if (bp == (void *) - 1) return NULL;
 
     //free Block 생성
-    PUT((char *)new_headp, PACK(wsize * WSIZE, 0));
-    PUT((char *)new_headp + (wsize * WSIZE) - WSIZE, PACK(wsize * WSIZE, 0));
+    PUT(HDRP(bp), PACK(wsize * WSIZE, 0));
+    PUT(FTRP(bp), PACK(wsize * WSIZE, 0));
+    //포인터
+    PUT(PRVP(bp), PACK(wsize * WSIZE, 0));
+    PUT(NXTP(bp), PACK(wsize * WSIZE, 0));
     //Epilogue
-    PUT((char *)new_headp + (wsize * WSIZE), PACK(0, 1));
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
     return coalesce(bp);
 }
@@ -359,3 +327,12 @@ void place(void *bp, size_t asize) {
     PUT(FTRP(next_bp), PACK(temp, 0));
     return;
 }
+
+// void insert() {
+
+// }
+
+// void remove(){
+
+
+// }

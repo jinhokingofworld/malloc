@@ -32,9 +32,9 @@ size_t mem_pagesize(void);    //시스템 페이지 크기 반환
 
 // //header 위치 = header는 1WORD만큼이니까 bp에서 4 줄임
 // #define HDRP(bp)        ((char *)(bp) - WSIZE)
-// //payload 시작주소 + 현재 블록 크기 = 다음 블록 payload 시작주소
-// //payload시작주소 - header - footer => footer 시작주소
 // #define FTRP(bp)        ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+// #define PRVP(bp)        ((char *)(bp))
+// #define NXTP(bp)        ((char *)(bp) + WSIZE)
 
 // #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 // #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
